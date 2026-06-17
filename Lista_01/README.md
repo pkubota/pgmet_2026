@@ -1,1 +1,1 @@
-Data de Entraga da lista-1   (22/06/2026)  
+Data da Entrega da lista-1   (22/06/2026)  
