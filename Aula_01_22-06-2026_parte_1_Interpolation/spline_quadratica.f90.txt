@@ -1,0 +1,72 @@
+module spline_module
+  implicit none
+contains
+
+  ! Subrotina para calcular a interpolação spline quadrática
+  subroutine quadratic_spline(x, y, n, a, b, c)
+    implicit none
+    integer, intent(in) :: n
+    real(8), intent(in) :: x(n), y(n)
+    real(8), intent(out) :: a(n-1), b(n-1), c(n-1)
+    real(8) :: h(n-1), alpha(n-1)
+    integer :: i
+
+    ! Passo 1: Calcular os valores de h e alpha
+    do i = 1, n-1
+      h(i) = x(i+1) - x(i)
+    end do
+
+    ! Passo 2: Resolver o sistema para os coeficientes
+    do i = 1, n-1
+      alpha(i) = (y(i+1) - y(i)) / h(i)
+    end do
+
+    ! Passo 3: Calcular os coeficientes a, b e c
+    do i = 1, n-1
+      a(i) = y(i)  ! Coeficiente a é o valor de y no ponto x_i
+      b(i) = alpha(i)  ! Coeficiente b é a taxa de variação entre os pontos
+      c(i) = 0.0d0  ! Não estamos usando um termo quadrático aqui, pois é spline quadrática
+    end do
+  end subroutine quadratic_spline
+
+  ! Função para avaliar a spline quadrática em um ponto xi
+  function eval_spline(x, a, b, c, xi, n) result(s)
+    implicit none
+    real(8), intent(in) :: x(n), a(n-1), b(n-1), c(n-1), xi
+    integer, intent(in) :: n
+    real(8) :: s
+    integer :: i
+
+    ! Localiza o intervalo onde xi está
+    do i = 1, n-1
+      if (xi >= x(i) .and. xi <= x(i+1)) exit
+    end do
+
+    ! Avalia o polinômio quadrático
+    s = a(i) + b(i)*(xi - x(i)) + c(i)*(xi - x(i))**2
+  end function eval_spline
+
+end module spline_module
+
+program spline_test
+  use spline_module
+  implicit none
+  integer, parameter :: n = 5
+  real(8) :: x(n) = [0.0d0, 1.0d0, 2.0d0, 3.0d0, 4.0d0]
+  real(8) :: y(n) = [0.0d0, 1.0d0, 4.0d0, 9.0d0, 16.0d0]
+  real(8) :: a(n-1), b(n-1), c(n-1)
+  real(8) :: xi, yi
+  integer :: j
+
+  ! Chama a subrotina para calcular os coeficientes
+  call quadratic_spline(x, y, n, a, b, c)
+
+  ! Avaliar e imprimir os resultados
+  print *, "Spline avaliada em pontos intermediários:"
+  do j = 0, 100
+    xi = 0.0d0 + j * 4.0d0 / 100.0d0
+    yi = eval_spline(x, a, b, c, xi, n)
+    print *, xi, yi
+  end do
+
+end program spline_test
