@@ -58,7 +58,7 @@
 !   Adveccao : forma de FLUXO conservativa, reconstrucao upwind/FTBS de 1a
 !              ordem nos meios-niveis (o analogo, em coordenada generica,
 !              da forma de fluxo ja usada na equacao da continuidade em
-!              sigma, Secao 5.1: ∂π/∂t + ∇.(πV) + ∂(π*sigmadot)/∂sigma=0).
+!              sigma, Secao 5.1:  dA/dt|_csi = - csidot * dA/dcsi  +  m * d/dcsi[ K * m * dA/dcsi ] .
 !              Esta forma conserva EXATAMENTE a soma discreta de A ponderada
 !              por dcsi (a "massa" na coordenada nativa), mesmo quando
 !              csidot varia com o nivel (fluxo cisalhante/convergente) --
@@ -97,7 +97,7 @@
 !   nenhuma das duas isoladamente -- um efeito real e conhecido, e a razao
 !   pela qual modelos atmosfericos operacionais escrevem a equacao de
 !   continuidade (e, por consistencia, o transporte de escalares) para a
-!   variavel de massa PONDERADA (πA em sigma, Secao 5.1), e nao para o
+!   variavel de massa PONDERADA (�dA em sigma, Secao 5.1), e nao para o
 !   escalar A isolado: e a variavel ponderada, no formalismo de fluxo, que
 !   possui uma unica lei de conservacao consistente entre adveccao e difusao.
 !   Os dois diagnosticos abaixo tornam esse efeito visivel e mensuravel.
