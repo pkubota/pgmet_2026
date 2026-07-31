@@ -71,7 +71,7 @@ axes[1].grid(alpha=0.3)
 
 plt.suptitle("Passo 1 - Evolucao vertical de qc e qr (esquema de chuva quente)")
 plt.tight_layout()
-plt.savefig("/home/claude/microfisica_project/fig_perfis_verticais.png", dpi=130)
+plt.savefig("./fig_perfis_verticais.png", dpi=130)
 plt.close()
 
 # ----------------------------------------------------------------------
@@ -101,9 +101,35 @@ axes[1].grid(alpha=0.3)
 axes[1].set_title("Concentracao numerica total (nota a escala log)")
 
 plt.tight_layout()
-plt.savefig("/home/claude/microfisica_project/fig_series_temporais.png", dpi=130)
+plt.savefig("./fig_series_temporais.png", dpi=130)
 plt.close()
 
 print("\nFiguras salvas:")
-print(" - fig_perfis_verticais.png")
-print(" - fig_series_temporais.png")
+print(" - ./fig_perfis_verticais.png")
+print(" - ./fig_series_temporais.png")
+
+# ----------------------------------------------------------------------
+# 5) Dados numericos (perfis completos + series integradas), em ./
+# ----------------------------------------------------------------------
+np.savez_compressed(
+    "./resultados_passo1.npz",
+    t_s=np.array(historico["t"]),
+    z_m=coluna.z,
+    qc=np.array(historico["qc"]),
+    qr=np.array(historico["qr"]),
+    Nc=np.array(historico["Nc"]),
+    Nr=np.array(historico["Nr"]),
+    qv=np.array(historico["qv"]),
+    T_K=np.array(historico["T"]),
+    precip_superficie_mm=coluna.precip_superficie_mm,
+)
+
+with open("./series_passo1.csv", "w") as f:
+    f.write("tempo_min,qc_total_kgm2,qr_total_kgm2,Nc_total_m2,Nr_total_m2\n")
+    for i in range(len(t_min)):
+        f.write(f"{t_min[i]:.4f},{qc_total[i]:.6e},{qr_total[i]:.6e},"
+                f"{Nc_total[i]:.6e},{Nr_total[i]:.6e}\n")
+
+print("\nDados salvos:")
+print(" - ./resultados_passo1.npz  (perfis completos: t_s,z_m,qc,qr,Nc,Nr,qv,T_K)")
+print(" - ./series_passo1.csv      (series integradas na coluna)")

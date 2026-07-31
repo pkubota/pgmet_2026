@@ -144,7 +144,34 @@ axes[1].legend()
 axes[1].grid(alpha=0.3)
 
 plt.tight_layout()
-plt.savefig("/home/claude/microfisica_project/fig_passo3_relampago.png", dpi=130)
+plt.savefig("./fig_passo3_relampago.png", dpi=130)
 plt.close()
 
-print("\nFigura salva: fig_passo3_relampago.png")
+print("\nFigura salva: ./fig_passo3_relampago.png")
+
+# ----------------------------------------------------------------------
+# 5) Dados numericos (series de taxa de flash + gelo/neve/graupel), em ./
+# ----------------------------------------------------------------------
+np.savez_compressed(
+    "./resultados_passo3_relampago.npz",
+    t_s=np.array(historico["t"]),
+    z_m=coluna.z,
+    w_prescrito=w_prescrito,
+    flash_rate_total=np.array(flash_rate_total),
+    flash_rate_cg=np.array(flash_rate_cg),
+    flash_rate_ic=np.array(flash_rate_ic),
+    qi_total_kgm2=np.array(qi_total),
+    qs_total_kgm2=np.array(qs_total),
+    qg_total_kgm2=np.array(qg_total),
+)
+
+with open("./series_passo3_relampago.csv", "w") as f:
+    f.write("tempo_min,flash_rate_total,flash_rate_cg,flash_rate_ic,"
+            "qi_total_kgm2,qs_total_kgm2,qg_total_kgm2\n")
+    for i in range(len(t_min)):
+        f.write(f"{t_min[i]:.4f},{flash_rate_total[i]:.6e},{flash_rate_cg[i]:.6e},"
+                f"{flash_rate_ic[i]:.6e},{qi_total[i]:.6e},{qs_total[i]:.6e},{qg_total[i]:.6e}\n")
+
+print("\nDados salvos:")
+print(" - ./resultados_passo3_relampago.npz")
+print(" - ./series_passo3_relampago.csv")

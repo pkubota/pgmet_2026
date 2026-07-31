@@ -78,7 +78,7 @@ axes[0].legend(fontsize=7)
 
 plt.suptitle("Passo 3 - Neve, graupel e interacoes de fase mista")
 plt.tight_layout()
-plt.savefig("/home/claude/microfisica_project/fig_passo3_perfis.png", dpi=130)
+plt.savefig("./fig_passo3_perfis.png", dpi=130)
 plt.close()
 
 # ----------------------------------------------------------------------
@@ -101,9 +101,41 @@ ax.set_title("Evolucao de todas as categorias de agua (Passo 3)")
 ax.legend()
 ax.grid(alpha=0.3)
 plt.tight_layout()
-plt.savefig("/home/claude/microfisica_project/fig_passo3_series.png", dpi=130)
+plt.savefig("./fig_passo3_series.png", dpi=130)
 plt.close()
 
 print("\nFiguras salvas:")
-print(" - fig_passo3_perfis.png")
-print(" - fig_passo3_series.png")
+print(" - ./fig_passo3_perfis.png")
+print(" - ./fig_passo3_series.png")
+
+# ----------------------------------------------------------------------
+# 5) Dados numericos (perfis completos + series integradas), em ./
+# ----------------------------------------------------------------------
+np.savez_compressed(
+    "./resultados_passo3.npz",
+    t_s=np.array(historico["t"]),
+    z_m=coluna.z,
+    qc=np.array(historico["qc"]),
+    qr=np.array(historico["qr"]),
+    qi=np.array(historico["qi"]),
+    qs=np.array(historico["qs"]),
+    qg=np.array(historico["qg"]),
+    Nc=np.array(historico["Nc"]),
+    Nr=np.array(historico["Nr"]),
+    Ni=np.array(historico["Ni"]),
+    Ns=np.array(historico["Ns"]),
+    Ng=np.array(historico["Ng"]),
+    qv=np.array(historico["qv"]),
+    T_K=np.array(historico["T"]),
+    precip_superficie_mm=coluna.precip_superficie_mm,
+)
+
+with open("./series_passo3.csv", "w") as f:
+    f.write("tempo_min,qc_total_kgm2,qi_total_kgm2,qs_total_kgm2,qg_total_kgm2,qr_total_kgm2\n")
+    for i in range(len(t_min)):
+        f.write(f"{t_min[i]:.4f},{massa_total('qc')[i]:.6e},{massa_total('qi')[i]:.6e},"
+                f"{massa_total('qs')[i]:.6e},{massa_total('qg')[i]:.6e},{massa_total('qr')[i]:.6e}\n")
+
+print("\nDados salvos:")
+print(" - ./resultados_passo3.npz  (perfis completos: t_s,z_m,qc,qr,qi,qs,qg,Nc,Nr,Ni,Ns,Ng,qv,T_K)")
+print(" - ./series_passo3.csv      (series integradas na coluna)")

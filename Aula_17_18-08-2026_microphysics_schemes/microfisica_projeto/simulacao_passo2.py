@@ -89,7 +89,7 @@ axes[2].grid(alpha=0.3)
 
 plt.suptitle("Passo 2 - Fase gelo e efeito Wegener-Bergeron-Findeisen")
 plt.tight_layout()
-plt.savefig("/home/claude/microfisica_project/fig_passo2_perfis.png", dpi=130)
+plt.savefig("./fig_passo2_perfis.png", dpi=130)
 plt.close()
 
 # ----------------------------------------------------------------------
@@ -110,9 +110,36 @@ ax.set_title("Transferencia de massa liquido -> gelo (efeito WBF)")
 ax.legend()
 ax.grid(alpha=0.3)
 plt.tight_layout()
-plt.savefig("/home/claude/microfisica_project/fig_passo2_series.png", dpi=130)
+plt.savefig("./fig_passo2_series.png", dpi=130)
 plt.close()
 
 print("\nFiguras salvas:")
-print(" - fig_passo2_perfis.png")
-print(" - fig_passo2_series.png")
+print(" - ./fig_passo2_perfis.png")
+print(" - ./fig_passo2_series.png")
+
+# ----------------------------------------------------------------------
+# 5) Dados numericos (perfis completos + series integradas), em ./
+# ----------------------------------------------------------------------
+np.savez_compressed(
+    "./resultados_passo2.npz",
+    t_s=np.array(historico["t"]),
+    z_m=coluna.z,
+    qc=np.array(historico["qc"]),
+    qr=np.array(historico["qr"]),
+    qi=np.array(historico["qi"]),
+    Nc=np.array(historico["Nc"]),
+    Nr=np.array(historico["Nr"]),
+    Ni=np.array(historico["Ni"]),
+    qv=np.array(historico["qv"]),
+    T_K=np.array(historico["T"]),
+    precip_superficie_mm=coluna.precip_superficie_mm,
+)
+
+with open("./series_passo2.csv", "w") as f:
+    f.write("tempo_min,qc_total_kgm2,qi_total_kgm2,qr_total_kgm2\n")
+    for i in range(len(t_min)):
+        f.write(f"{t_min[i]:.4f},{qc_total[i]:.6e},{qi_total[i]:.6e},{qr_total[i]:.6e}\n")
+
+print("\nDados salvos:")
+print(" - ./resultados_passo2.npz  (perfis completos: t_s,z_m,qc,qr,qi,Nc,Nr,Ni,qv,T_K)")
+print(" - ./series_passo2.csv      (series integradas na coluna)")
