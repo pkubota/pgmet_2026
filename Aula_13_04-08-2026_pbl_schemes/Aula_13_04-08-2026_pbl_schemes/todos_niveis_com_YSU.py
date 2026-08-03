@@ -607,7 +607,7 @@ if __name__ == "__main__":
     ax.legend(fontsize=8, loc='upper left')
     ax.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig('/home/claude/pbl_model/TODOS_h_vs_tempo.png', dpi=140)
+    plt.savefig('./TODOS_h_vs_tempo.png', dpi=140)
     print("Figura 1 (h vs tempo) salva.")
 
     # -----------------------------------------------------------------
@@ -626,7 +626,7 @@ if __name__ == "__main__":
     for ax in axes:
         ax.set_ylim(0, 1500)
     plt.tight_layout()
-    plt.savefig('/home/claude/pbl_model/TODOS_hovmoller_theta.png', dpi=140)
+    plt.savefig('./TODOS_hovmoller_theta.png', dpi=140)
     print("Figura 2 (Hovmoller theta, Ekman vs MYNN-TKE) salva.")
 
     # -----------------------------------------------------------------
@@ -650,7 +650,7 @@ if __name__ == "__main__":
     fig.colorbar(im, ax=axes, label='Theta (K)', shrink=0.8, pad=0.01)
     plt.suptitle(f'Hovmoller de theta(z,t) - TODOS OS 5 ESTAGIOS ({N_HORAS:.0f}h, mesma escala de cor)',
                  y=1.03, fontsize=13)
-    plt.savefig('/home/claude/pbl_model/TODOS_hovmoller_theta_5estagios.png', dpi=140,
+    plt.savefig('./TODOS_hovmoller_theta_5estagios.png', dpi=140,
                 bbox_inches='tight')
     print("Figura 2b (Hovmoller theta, TODOS os 5 estagios) salva.")
 
