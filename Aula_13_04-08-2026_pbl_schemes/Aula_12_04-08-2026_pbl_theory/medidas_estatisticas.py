@@ -91,5 +91,5 @@ ax.set_ylabel("densidade")
 ax.legend(fontsize=9)
 
 plt.tight_layout()
-plt.savefig("/mnt/user-data/outputs/medidas_estatisticas.png", dpi=150)
+plt.savefig("medidas_estatisticas.png", dpi=150)
 print("\nGráfico salvo em medidas_estatisticas.png")
