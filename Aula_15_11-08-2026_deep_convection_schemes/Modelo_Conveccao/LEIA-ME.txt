@@ -1,0 +1,64 @@
+MODELO CONCEITUAL DE FLUXO DE MASSA PARA A TRANSICAO CONVECTIVA RASA-PROFUNDA
+================================================================================
+Curso: Conveccao Atmosferica - Regimes de Transicao
+Pacote gerado em: 2026 (ver Relatorio_INPE_RPQ_Modelo_Conveccao.pdf para detalhes)
+
+CONTEUDO
+--------
+Relatorio_INPE_RPQ_Modelo_Conveccao.pdf
+    Relatorio completo no padrao INPE (RPQ), com todos os processos
+    fisicos, guia de uso de cada script e resultados esperados.
+    LEIA ISSO PRIMEIRO.
+
+scripts/transicao_rasa_profunda.py  (v1)
+    Modelo heuristico inicial: CIN e fluxo de massa raso por formulas
+    escalares. Ponto de partida pedagogico -- mostra o que falta antes
+    de ter fluxo de massa real.
+
+scripts/transicao_fluxo_de_massa_v2.py
+    Pluma entranhante real (fluxo de massa explicito) + formacao de
+    precipitacao (formulacao operacional do Tiedtke).
+
+scripts/transicao_fluxo_de_massa_v3.py
+    Versao completa: fase gelo/liquida, downdraft convectivo, evaporacao
+    sub-nuvem, derretimento de neve, fechamento por quase-equilibrio de
+    CAPE, transporte de momentum, espectro de plumas (Arakawa-Schubert),
+    resfriamento radiativo, e tendencias convectivas (dtheta/dt, dq/dt,
+    du/dt) sobre o ambiente de grande escala.
+
+scripts/transicao_fluxo_de_massa_v3_documentado.py
+    Mesma fisica da v3, com cabecalho e comentarios mapeando cada secao
+    do codigo as equacoes do material de aula (slides do curso). Use
+    esta versao como referencia de estudo.
+
+scripts/nuvem_2d.py
+    Modelo 2D explicito (vorticidade-funcao de corrente, Boussinesq):
+    resolve uma nuvem convectiva isolada em (x,z), sem parametrizar
+    fluxo de massa. Fisica selecionavel por linha de comando
+    (--microfisica, --evap-chuva, --radiacao, --bolha). O downdraft
+    EMERGE da dinamica (chuva cai, evapora, resfria, gera corrente
+    descendente) em vez de ser parametrizado como na v3. Tambem calcula
+    e plota as tendencias (dtheta/dt, dq/dt, du/dt) resolvidas.
+
+COMO RODAR
+----------
+Requisitos: Python 3 com numpy e matplotlib (nuvem_2d.py tambem aceita
+scipy, mas nao depende dele -- usa um solver de Poisson por Jacobi).
+
+    python3 transicao_rasa_profunda.py
+    python3 transicao_fluxo_de_massa_v2.py
+    python3 transicao_fluxo_de_massa_v3.py
+    python3 transicao_fluxo_de_massa_v3_documentado.py
+
+    python3 nuvem_2d.py --bolha 2.5 --microfisica quente --cenario rasa
+    python3 nuvem_2d.py --bolha 7.0 --microfisica mista --evap-chuva on --cenario profunda
+
+Todos os scripts sao ASCII puro (sem acentos nem simbolos gregos no
+texto impresso) -- evita UnicodeEncodeError em terminais Windows com
+paginas de codigo diferentes de UTF-8. Se ainda tiver problema, rode
+"chcp 65001" antes (Windows) ou defina a variavel de ambiente
+PYTHONUTF8=1.
+
+Ver o Capitulo 3 do relatorio para a lista completa de parametros
+ajustaveis de cada script, e o Capitulo 4 para os resultados numericos
+esperados de cada um.
