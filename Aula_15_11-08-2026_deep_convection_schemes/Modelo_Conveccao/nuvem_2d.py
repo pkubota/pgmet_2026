@@ -55,7 +55,18 @@ do cabecalho, ou rode com --help):
         amplitude da bolha termica inicial (K) -- controla se a nuvem
         fica rasa ou rompe para profunda, como nos cenarios do v2/v3
   --tempo MINUTOS
-        tempo total de simulacao (padrao 60 min)
+        tempo total de simulacao (padrao 60 min; 720 min se --ciclo-diurno on)
+  --ciclo-diurno {on, off}
+        on: ativa a fisica de encroachment da v1/v2/v3 -- SHF(t)/LHF(t)
+        senoidais, CLC crescendo (h(t), theta_ml(t), q_ml(t)), MISTURADAS
+        ao perfil estatico de CIN/CAPE (para z >= h(t)). Em vez de UMA
+        bolha fixa em t=0, termicas sao disparadas periodicamente com
+        amplitude escalada pelo SHF(t) do momento -- o disparo da
+        conveccao profunda passa a ser uma CONSEQUENCIA do ciclo diurno,
+        nao um cenario prescrito manualmente. Sem isso (off, padrao),
+        o modelo roda como um "estudo de caso" de uma unica termica num
+        ambiente fixo -- mais rapido, bom para comparar --bolha fraca vs.
+        forte isoladamente.
   --cenario NOME
         rotulo usado nos nomes dos arquivos de figura gerados
 
@@ -83,18 +94,25 @@ parser.add_argument("--evap-chuva", choices=["on", "off"], default="on",
                      help="evaporacao da chuva abaixo da nuvem (gera downdraft/cold pool se 'on')")
 parser.add_argument("--radiacao", choices=["on", "off"], default="off",
                      help="resfriamento radiativo lento do ambiente (v3)")
-parser.add_argument("--tempo", type=float, default=60.0, help="tempo total de simulacao [min]")
+parser.add_argument("--ciclo-diurno", choices=["on", "off"], default="off",
+                     help="ativa SHF/LHF diurnos + CLC crescendo (encroachment, v1/v2/v3)")
+parser.add_argument("--tempo", type=float, default=None, help="tempo total de simulacao [min]")
 args, _unknown = parser.parse_known_args()
 
 MICROFISICA = args.microfisica
 EVAP_CHUVA = (args.evap_chuva == "on")
 RADIACAO = (args.radiacao == "on")
+CICLO_DIURNO = (args.ciclo_diurno == "on")
 DTHETA_BUBBLE = args.bolha
 CENARIO = args.cenario
-T_END = args.tempo * 60.0
+if args.tempo is not None:
+    T_END = args.tempo * 60.0
+else:
+    T_END = 720.0*60.0 if CICLO_DIURNO else 60.0*60.0
 
 print(f"Configuracao: bolha={DTHETA_BUBBLE}K  microfisica={MICROFISICA}  "
-      f"evap_chuva={EVAP_CHUVA}  radiacao={RADIACAO}  tempo={args.tempo}min  cenario={CENARIO}")
+      f"evap_chuva={EVAP_CHUVA}  radiacao={RADIACAO}  ciclo_diurno={CICLO_DIURNO}  "
+      f"tempo={T_END/60:.0f}min  cenario={CENARIO}")
 
 # =====================================================================
 # 1. CONSTANTES E GRADE
@@ -144,6 +162,33 @@ def qsat_mixed(T, p):
     return (1.0-fi)*qsat_liq(T, p) + fi*qsat_ice(T, p)
 
 # =====================================================================
+# 1b. FORCANTE DIURNA E CLC (encroachment) -- so usado se --ciclo-diurno on
+#     Mesmas formulas de transicao_rasa_profunda.py (v1): SHF/LHF senoidais,
+#     crescimento da CLC por energia (dh/dt = SHF/(rho*cp*h*gamma_local)).
+# =====================================================================
+t_sunrise = 6*3600.0    # soh para exibicao (hora = 6 + t/3600); a simulacao ja COMECA no nascer do sol
+daylength = 12*3600.0
+SHF_max, LHF_max = 250.0, 300.0
+rho0_sfc = 1.15
+
+def SHF(t):
+    """t = segundos DESDE O INICIO DA SIMULACAO (que ja comeca as 6h)."""
+    return max(0.0, SHF_max*np.sin(np.pi*t/daylength)) if 0 <= t <= daylength else 0.0
+
+def LHF(t):
+    """t = segundos DESDE O INICIO DA SIMULACAO (que ja comeca as 6h)."""
+    return max(0.0, LHF_max*np.sin(np.pi*t/daylength)) if 0 <= t <= daylength else 0.0
+
+# Estado da CLC (atualizado a cada passo se CICLO_DIURNO=True)
+h_clc = 200.0        # profundidade inicial da CLC [m]
+theta_ml = None      # diagnosticada (encroachment: theta_ml = theta_env_static(h_clc))
+q_ml = 11.0e-3        # umidade especifica inicial da CLC [kg/kg]
+
+REARM_INTERVAL = 600.0    # s -- intervalo entre disparos de novas termicas (10 min)
+BASE_BUBBLE_AMP = 4.0      # K -- amplitude de referencia (escalada por SHF(t)/SHF_max)
+_last_trigger_t = [-1e9]   # mutavel: hora do ultimo disparo de termica
+
+# =====================================================================
 # 2. ESTADO BASE (ambiente) -- mesma filosofia dos modelos de coluna:
 #    camada quase-neutra -> capa estavel (CIN) -> camada fracamente
 #    estavel em theta mas condicionalmente instavel na saturacao (CAPE)
@@ -181,6 +226,24 @@ QV_ENV_BASE = qv_env_1d.copy()   # referencia p/ resfriamento radiativo nao mexe
 
 RAD_COOL_RATE = 1.5/86400.0   # K/s (~1.5 K/dia) -- so usado se --radiacao on
 
+def build_env_now(h_now, theta_ml_now, q_ml_now):
+    """
+    Perfil ambiente instantaneo: para z<h_now, a CLC bem misturada
+    (theta_ml_now, q_ml_now, constantes com a altura); para z>=h_now, o
+    perfil estatico de fundo (theta_env_1d/qv_env_1d, a mesma estrutura
+    de CIN/CAPE de sempre). Por construcao do encroachment, theta_ml_now
+    == theta_env_1d no nivel h_now, entao o perfil de theta emenda sem
+    salto ali; q_ml_now pode ser diferente de qv_env_1d(h_now) (o mesmo
+    "entranhamento seca a CLC" da v1/v2/v3), entao a umidade PODE ter um
+    pequeno salto em z=h_now -- fisicamente esperado (a base da nuvem
+    real quase sempre tem um salto de umidade no topo da CLC).
+    """
+    theta_now = np.where(z < h_now, theta_ml_now, theta_env_1d)
+    qv_now = np.where(z < h_now, q_ml_now, qv_env_1d)
+    dtheta_dz_now = np.gradient(theta_now, dz)
+    dqv_dz_now = np.gradient(qv_now, dz)
+    return theta_now, qv_now, dtheta_dz_now, dqv_dz_now
+
 # =====================================================================
 # 3. CAMPOS PROGNOSTICOS (criados conforme a opcao de microfisica)
 # =====================================================================
@@ -195,12 +258,33 @@ qsnow = np.zeros((nx, nz))           # neve/graupel -- so usado se microfisica =
 
 surface_rain_accum = np.zeros(nx)     # acumulado de chuva na superficie [mm]
 
-# --- Bolha termica inicial (o gatilho) ---
+# --- Bolha termica inicial (o gatilho) -- so no modo sem ciclo diurno ---
 X0, Z0 = 4500.0, 500.0
 RX, RZ = 1100.0, 600.0
 r2 = ((X-X0)/RX)**2 + ((Z-Z0)/RZ)**2
-thp += DTHETA_BUBBLE*np.exp(-r2)*(r2 < 6)
-qvp += 0.5e-3*np.exp(-r2)*(r2 < 6)
+if not CICLO_DIURNO:
+    thp += DTHETA_BUBBLE*np.exp(-r2)*(r2 < 6)
+    qvp += 0.5e-3*np.exp(-r2)*(r2 < 6)
+
+def dispara_termica(t_now, h_now, amp_scale):
+    """
+    Modo --ciclo-diurno: em vez de uma unica bolha em t=0, novas termicas
+    sao injetadas periodicamente (a cada REARM_INTERVAL) partindo do topo
+    da CLC (h_now), com amplitude escalada pelo aquecimento de superficie
+    do momento (amp_scale = SHF(t)/SHF_max). Representa, de forma muito
+    simplificada, a populacao continua de termicas de camada limite --
+    nao um espectro real, so um gatilho periodico fisicamente motivado.
+    """
+    global thp, qvp
+    if t_now - _last_trigger_t[0] < REARM_INTERVAL:
+        return
+    _last_trigger_t[0] = t_now
+    amp = BASE_BUBBLE_AMP*max(amp_scale, 0.05)
+    z0_bubble = max(h_now*0.5, 100.0)
+    rz_bubble = max(h_now*0.4, 150.0)
+    r2_now = ((X-X0)/RX)**2 + ((Z-z0_bubble)/rz_bubble)**2
+    thp[:] = thp + amp*np.exp(-r2_now)*(r2_now < 6)
+    qvp[:] = qvp + 0.5e-3*np.exp(-r2_now)*(r2_now < 6)
 
 # =====================================================================
 # 4. OPERADORES NUMERICOS
@@ -278,15 +362,43 @@ save_every = int(300/dt)
 
 frames_qc, frames_qr, frames_w, frames_thp, frames_t = [], [], [], [], []
 frames_qvp, frames_u = [], []   # necessarios para calcular as tendencias (dtheta/dt, dq/dt, du/dt)
+frames_h_clc, frames_SHF = [], []   # diagnostico do ciclo diurno (so relevante se CICLO_DIURNO)
 
 for step in range(nsteps+1):
     u, w = velocities(psi)
+    t_now = step*dt
+
+    # --- ciclo diurno (opcional): CLC cresce por encroachment, dispara termicas ---
+    if CICLO_DIURNO:
+        shf_now = SHF(t_now)
+        lhf_now = LHF(t_now)
+        if theta_ml is None:
+            theta_ml = float(np.interp(h_clc, z, theta_env_1d))
+        gamma_local = max(float(np.interp(h_clc, z, np.gradient(theta_env_1d, dz))), 1.0e-4)
+        dh = dt*shf_now/(rho0_sfc*cp*h_clc*gamma_local) if shf_now > 0 else 0.0
+        h_clc = max(h_clc + dh, 200.0)
+        theta_ml = float(np.interp(h_clc, z, theta_env_1d))
+        q_env_top = float(np.interp(h_clc, z, qv_env_1d))
+        q_ml = q_ml + dt*(lhf_now/(rho0_sfc*Lv*h_clc)) + (q_env_top - q_ml)*(dh/h_clc if h_clc > 0 else 0.0)
+        q_ml = max(q_ml, 1.0e-4)
+
+        theta_env_now_1d, qv_env_now_1d, dtheta_dz_now_1d, dqv_dz_now_1d = build_env_now(h_clc, theta_ml, q_ml)
+
+        if shf_now > 0:
+            dispara_termica(t_now, h_clc, shf_now/SHF_max)
+
+        if step % save_every == 0:
+            frames_h_clc.append(h_clc)
+            frames_SHF.append(shf_now)
+    else:
+        theta_env_now_1d, qv_env_now_1d = theta_env_1d, qv_env_1d
+        dtheta_dz_now_1d, dqv_dz_now_1d = DTHETA_ENV_DZ, DQV_ENV_DZ
 
     # --- resfriamento radiativo lento (opcional) ---
     if RADIACAO:
-        THETA_ENV_now = THETA_ENV - RAD_COOL_RATE*step*dt
+        THETA_ENV_now = theta_env_now_1d[None, :] - RAD_COOL_RATE*t_now
     else:
-        THETA_ENV_now = THETA_ENV
+        THETA_ENV_now = theta_env_now_1d[None, :]
 
     T = (THETA_ENV_now+thp)*PI[None, :]
 
@@ -299,7 +411,7 @@ for step in range(nsteps+1):
             qs = qsat_liq(T, P[None, :])
             fi = np.zeros_like(T)
 
-        qv_total = qv_env_1d[None, :] + qvp
+        qv_total = qv_env_now_1d[None, :] + qvp
         cond = qv_total - qs
         to_condense = np.maximum(cond, 0.0)
         # evapora primeiro a agua liquida de nuvem, depois (mista) o gelo
@@ -340,7 +452,7 @@ for step in range(nsteps+1):
         # --- evaporacao da chuva/neve no ar nao saturado (=> downdraft resolvido) ---
         if EVAP_CHUVA:
             qs_now = qsat_liq(T, P[None, :])
-            deficit = np.maximum(qs_now - (qv_env_1d[None, :]+qvp), 0.0)
+            deficit = np.maximum(qs_now - (qv_env_now_1d[None, :]+qvp), 0.0)
             evap_rain = np.minimum(qr, EVAP_COEF*dt*deficit*1000.0*qr)
             qr -= evap_rain
             qvp += evap_rain
@@ -368,8 +480,8 @@ for step in range(nsteps+1):
     buoy_torque = (g/theta0)*dthv_dx
 
     dzeta = upwind_advect(zeta, u, w) + buoy_torque + K_DIFF*laplacian(zeta)
-    dthp = upwind_advect(thp, u, w) - w*DTHETA_ENV_DZ[None, :] + K_DIFF*laplacian(thp)
-    dqvp = upwind_advect(qvp, u, w) - w*DQV_ENV_DZ[None, :] + K_DIFF*laplacian(qvp)
+    dthp = upwind_advect(thp, u, w) - w*dtheta_dz_now_1d[None, :] + K_DIFF*laplacian(thp)
+    dqvp = upwind_advect(qvp, u, w) - w*dqv_dz_now_1d[None, :] + K_DIFF*laplacian(qvp)
     dqc = upwind_advect(qc, u, w) + K_DIFF*laplacian(qc)
     dqi = upwind_advect(qi, u, w) + K_DIFF*laplacian(qi) if MICROFISICA == "mista" else 0.0
     dqr = upwind_advect(qr, u, w-VT_RAIN) + K_DIFF*laplacian(qr) if MICROFISICA != "nenhuma" else 0.0
@@ -408,9 +520,10 @@ for step in range(nsteps+1):
         frames_u.append(u.copy())
         frames_t.append(step*dt)
         cloud_top = z[np.where((qc+qi).max(axis=0) > 1e-5)[0].max()] if (qc+qi).max() > 1e-5 else 0
+        extra = f" | hora={6+t_now/3600:5.2f}h | h_CLC={h_clc:5.0f}m | SHF={SHF(t_now):5.0f}W/m2" if CICLO_DIURNO else ""
         print(f"t={step*dt/60:5.1f} min | w_max={w.max():5.2f} m/s | w_min={w.min():5.2f} m/s | "
               f"qc_max={(qc+qi).max()*1000:5.3f} g/kg | topo_nuvem~{cloud_top:6.0f} m | "
-              f"thp_min={thp.min():5.2f} K (cold pool se negativo perto do chao)")
+              f"thp_min={thp.min():5.2f} K (cold pool se negativo perto do chao){extra}")
 
 print("Simulacao concluida.")
 
