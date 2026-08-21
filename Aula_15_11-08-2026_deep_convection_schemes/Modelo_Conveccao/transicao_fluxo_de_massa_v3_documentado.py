@@ -50,74 +50,88 @@ simplificacoes de cada peca sao documentadas nos comentarios e no
 adendo em Word que acompanha este script.
 """
 
-"""
-CORRESPONDENCIA COM A NOTACAO DO CURSO (MET-576-4_Curso_Parametrizacao_de_
-Conveccao_Profunda_2025.pdf, Paulo Kubota)
-=============================================================================
-Slide 39, Eq. 22-23 (balanco de calor/umidade em larga escala):
-    d(rhosigmas_c)/dt + nablah(sigmas_c.M_h) = d(M_c)/dz.s - d(sigmam_c s_c)/dz + rhoL(c)
-    d(rhosigmaq_c)/dt + nablah(sigmaq_c.M_h) = d(M_c)/dz.q - d(sigmam_c q_c)/dz - rho(c)
-  -> No codigo: run_plume() integra o equivalente de s_c (energia estatica,
-     aqui liquida-gelo: sli = cp.T + g.z - Lv.ql - Ls.qi) e q_c (aqui qt,
-     agua total) ao longo de z, para UMA coluna (sem adveccao horizontal
-     nablah, que este modelo 1D nao representa).
-
-Slide 66, Eq. 22-23 / Slide 70, Eq. 24-29 (fluxo de massa da nuvem M_c,
-excesso de s_c e q_c sobre o ambiente ~s, ~q):
-    M_c = fluxo de massa da nuvem;  sigma = Sigmaisigmai fracao de area
-  -> No codigo: Mb_shallow(t), Mb_deep(t) (fluxo de massa de base) e o
-     proprio "epsilon" de entranhamento dentro de run_plume().
-
-Slide 70 (criterio de entranhamento/detranhamento):
-    entranhamento:  (s_c - s).dM_c/dz > 0 ,  dM_c/dz > 0
-    detranhamento:  (s_c - s).dM_c/dz < 0
-  -> No codigo: a mistura por entranhamento (sli, qt relaxando para
-     sli_env, qt_env) representa a mistura turbulenta continua; o
-     "detranhamento organizado" no topo (mom_flux_top, last_shallow_qtop)
-     representa o caso dM_c/dz<0 no nivel onde w^2->0.
-
-Slide 75, Eq. 29, 33 (balanco de energia estatica umida na camada de
-detranhamento, M_c.dh_c/dz = 0 -> h_c constante):
-  -> No codigo: dentro de run_plume(), sli e qt sao exatamente
-     CONSERVADOS entre niveis (so mudam por entranhamento/precipitacao) -
-     a mesma ideia de conservacao de h_c=s_c+L.q_c ao longo da ascensao
-     adiabatica, aqui generalizada para fase liquida+gelo (h_c -> sli).
-
-Slides 93-97, Eq. 40-43 (fechamento por quase-equilibrio de energia
-cinetica do conjunto de nuvens):
-    dK/dt = (A-D).M_B  ;  tau_DIS = tempo de decaimento de K
-    quase-equilibrio (tau_DIS << tau_LS):  A = D  (funcao-trabalho = dissipacao)
-  -> No codigo: TAU_ADJUST (equivalente a tau_LS) e CAPE_REF definem o
-     fechamento Mb_deep = Mb_shallow.(CAPE/CAPE_REF) - uma versao MUITO
-     simplificada de A=D, usando o CAPE do espectro de plumas como proxy
-     da funcao-trabalho A, relaxado em TAU_ADJUST em vez de resolver a
-     Eq. 42 completa.
-
-Slide 139 (diagrama CAPE/CIN, LFC, LNB - "free after Brian Mapes"):
-  -> No codigo: B_arr (perfil de empuxo) dentro de run_plume(); o ponto
-     onde B cruza de negativo pra positivo e o analogo do LFC; z_top
-     (onde w^2->0) e o analogo do LNB para a pluma diluida (nao o LNB da
-     parcela nao-diluida classica).
-
-Slide 165, Eq. A28-A34 (Simplified Arakawa-Schubert - espectro de plumas):
-    F_s = integral de eta_u(lambda,z)[s_u(lambda,z)-s(z)].m_b(lambda)dlambda - integral de eta_d(lambda,z)[s_d(lambda,z)-s(z)].m_0(lambda)dlambda
-  -> No codigo: run_spectrum() integra varias taxas de entranhamento
-     EPS_SPECTRUM (analogo a variar lambda), cada uma com seu m_b(lambda) implicito
-     (aqui, todas usam o mesmo Mb_shallow(t), simplificacao); run_downdraft()
-     e o analogo (muito simplificado) do termo eta_d/m_0(lambda) de downdraft.
-
-Formacao de precipitacao (autoconversao): NAO vem dos slides do curso, e
-sim do codigo operacional real fornecido (module_cu_tiedtke_F.txt, rotina
-cuasc) - ver comentarios especificos na Secao 3 abaixo.
-=============================================================================
-"""
-
 import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 # (fix acima: evita UnicodeEncodeError em terminais Windows que nao usam UTF-8
 #  por padrao -- necessario para os acentos e simbolos gregos usados nos prints)
+
+"""
+CORRESPONDENCIA COM A NOTACAO DO CURSO (MET-576-4_Curso_Parametrizacao_de_
+Conveccao_Profunda_2025.pdf, Paulo Kubota)
+=============================================================================
+Slide 39, Eq. 22-23 (balanco de calor/umidade em larga escala):
+    d(rho_barra*sigma*s_c)/dt + Nabla_h(sigma*s_c*M_h) = d(M_c_barra)/dz*s_til - d(sigma*m_c*s_c)/dz + rho*L(c_barra)
+    d(rho_barra*sigma*q_c)/dt + Nabla_h(sigma*q_c*M_h) = d(M_c_barra)/dz*q_til - d(sigma*m_c*q_c)/dz - rho*(c_barra)
+  -> No codigo: run_plume() integra o equivalente de s_c (energia estatica,
+     aqui liquida-gelo: sli = cp*T + g*z - Lv*ql - Ls*qi) e q_c (aqui qt,
+     agua total) ao longo de z, para UMA coluna (sem advecao horizontal
+     Nabla_h, que este modelo 1D nao representa). A funcao NOVA
+     calcula_tendencias() fecha o loop: calcula exatamente os termos de
+     tendencia dessa mesma equacao (dtheta/dt, dq/dt, du/dt) que a
+     parametrizacao devolveria ao modelo hospedeiro -- ver nota especifica
+     mais abaixo, junto a funcao.
+
+Slide 66, Eq. 22-23 / Slide 70, Eq. 24-29 (fluxo de massa da nuvem M_c,
+excesso de s_c e q_c sobre o ambiente ~s, ~q):
+    M_c = fluxo de massa da nuvem;  sigma = soma_i(sigma_i) fracao de area
+  -> No codigo: Mb_shallow(t), Mb_deep(t) (fluxo de massa de base) e o
+     proprio "epsilon" de entranhamento dentro de run_plume(). A partir
+     desta versao, run_plume() tambem retorna o perfil M(z)/Mb = Mnorm(z)
+     (cresce por entranhamento, dM/dz=epsilon*M), usado por
+     calcula_tendencias().
+
+Slide 70 (criterio de entranhamento/detranhamento):
+    entranhamento:  (s_c - s_til)*dM_c_barra/dz > 0 ,  dM_c_barra/dz > 0
+    detranhamento:  (s_c - s_til)*dM_c_barra/dz < 0
+  -> No codigo: a mistura por entranhamento (sli, qt relaxando para
+     sli_env, qt_env) representa a mistura turbulenta continua; o
+     "detranhamento organizado" no topo (mom_flux_top, last_shallow_qtop,
+     e agora tambem o "pulso" de detranhamento em calcula_tendencias())
+     representa o caso dM_c/dz<0 no nivel onde w^2->0.
+
+Slide 75, Eq. 29, 33 (balanco de energia estatica umida na camada de
+detranhamento, M_c*dh_c/dz = 0 -> h_c constante):
+  -> No codigo: dentro de run_plume(), sli e qt sao exatamente
+     CONSERVADOS entre niveis (so mudam por entranhamento/precipitacao) --
+     a mesma ideia de conservacao de h_c=s_c+L*q_c ao longo da ascensao
+     adiabatica, aqui generalizada para fase liquida+gelo (h_c -> sli).
+
+Slides 93-97, Eq. 40-43 (fechamento por quase-equilibrio de energia
+cinetica do conjunto de nuvens):
+    dK/dt = (A-D)*M_B  ;  tau_DIS = tempo de decaimento de K
+    quase-equilibrio (tau_DIS << tau_LS):  A = D  (funcao-trabalho = dissipacao)
+  -> No codigo: TAU_ADJUST (equivalente a tau_LS) e CAPE_REF definem o
+     fechamento Mb_deep = Mb_shallow*(CAPE/CAPE_REF) -- uma versao MUITO
+     simplificada de A=D, usando o CAPE do espectro de plumas como proxy
+     da funcao-trabalho A, relaxado em TAU_ADJUST em vez de resolver a
+     Eq. 42 completa.
+
+Slide 139 (diagrama CAPE/CIN, LFC, LNB -- "free after Brian Mapes"):
+  -> No codigo: B_arr (perfil de empuxo) dentro de run_plume(); o ponto
+     onde B cruza de negativo pra positivo e o analogo do LFC; z_top
+     (onde w^2->0) e o analogo do LNB para a pluma diluida (nao o LNB da
+     parcela nao-diluida classica).
+
+Slide 165, Eq. A28-A34 (Simplified Arakawa-Schubert -- espectro de plumas):
+    F_s = integral{eta_u(lambda,z)*[s_u(lambda,z)-s_til(z)]*m_b(lambda)dlambda} - integral{eta_d(lambda,z)*[s_d(lambda,z)-s_til(z)]*m_0(lambda)dlambda}
+  -> No codigo: run_spectrum() integra varias taxas de entranhamento
+     EPS_SPECTRUM (analogo a variar lambda), cada uma com seu m_b(lambda)
+     implicito (aqui, todas usam o mesmo Mb_shallow(t), simplificacao);
+     run_downdraft() e o analogo (muito simplificado) do termo eta_d/m_0(lambda)
+     de downdraft.
+
+Formacao de precipitacao (autoconversao): NAO vem dos slides do curso, e
+sim do codigo operacional real fornecido (module_cu_tiedtke_F.txt, rotina
+cuasc) -- ver comentarios especificos na Secao 3 abaixo.
+
+TENDENCIAS CONVECTIVAS (calcula_tendencias(), Secao 3): fecha diretamente
+o loop com o slide 39 -- e o calculo explicito dos termos de tendencia
+dtheta/dt, dq/dt e du/dt que aparecem do lado esquerdo daquelas equacoes
+de balanco. Ver docstring da propria funcao para a formulacao completa.
+=============================================================================
+"""
 
 import numpy as np
 import matplotlib
@@ -167,6 +181,10 @@ def qsat(T, p):
 def p_of_z(z, p0=1000.0, H=8000.0):
     """Pressao hidrostatica aproximada [hPa] (escala fixa, simplificacao didatica)."""
     return p0 * np.exp(-z / H)
+
+def exner(z, p0=1000.0):
+    """Funcao de Exner Pi(z) = (p(z)/p0)^(Rd/cp) -- converte T <-> theta."""
+    return (p_of_z(z)/p0)**(Rd/cp)
 
 # =====================================================================
 # 2. SONDAGEM AMBIENTE (prescrita por taxas de lapso em camadas)
@@ -243,13 +261,6 @@ def sat_adjust_mixed(sli, qt, z, p):
     Resolve (T, q_vapor, q_liquido, q_gelo) dados a energia estatica
     liquida-gelo (sli = cp*T + g*z - Lv*ql - Ls*qi) e a agua total (qt),
     por iteracao de ponto fixo, usando a fracao de gelo dependente de T.
-
-    Correspondencia com o curso: sli e o analogo de h_c = s_c + L.q_c
-    (energia estatica umida do slide 66), generalizado para fase mista.
-    Fora do entranhamento, sli e qt sao EXATAMENTE conservados entre
-    niveis - o mesmo conteudo fisico de M_c.dh_c/dz = 0 (slide 75, Eq. 29
-    e 33): a energia estatica da nuvem nao muda com a altura na ausencia
-    de mistura com o ambiente.
     """
     T = (sli - g*z) / cp
     for _ in range(10):
@@ -277,13 +288,16 @@ def run_plume(z0, T0, q0, w2_0, epsilon, q_ft, u0=None, zmax=Z_TOP, dz=DZ):
     mista liquido/gelo, formacao de precipitacao (chuva + neve) e
     transporte de momentum (se u0 for fornecido). Retorna a altura de
     detranhamento, a agua que a pluma carrega ali, a precipitacao
-    (liquida e solida) e o fluxo de momentum no topo (detranhamento
-    organizado).
+    (liquida e solida), o fluxo de momentum no topo (detranhamento
+    organizado), e os perfis completos (theta_c, qt_c, u_c, fluxo de
+    massa normalizado M/Mb) usados para calcular as tendencias
+    convectivas sobre o ambiente de grande escala (ver
+    calcula_tendencias()).
 
     Correspondencia com o curso (slide 66/70, Eq. 22-29): esta funcao e
     a versao prognostica (integrada nivel a nivel) das equacoes de
-    balanco de s_c, q_c e h_c da nuvem. O parametro 'epsilon' e a taxa de
-    entranhamento fracionario - no curso, o SINAL de (s_c - s).dM_c/dz
+    balanco de s_c, q_c e h_c da nuvem. O parametro `epsilon` e a taxa de
+    entranhamento fracionario -- no curso, o SINAL de (s_c - s_til)*dM_c/dz
     decide entranhamento vs. detranhamento (slide 70); aqui simplificamos
     para uma taxa de entranhamento CONSTANTE ao longo de toda a ascensao
     (turbulento continuo) mais um detranhamento ORGANIZADO concentrado no
@@ -292,6 +306,10 @@ def run_plume(z0, T0, q0, w2_0, epsilon, q_ft, u0=None, zmax=Z_TOP, dz=DZ):
     n = int((zmax - z0) / dz) + 1
     z = z0 + np.arange(n) * dz
     B_arr = np.zeros(n)
+    theta_c_arr = np.zeros(n)
+    qt_c_arr = np.zeros(n)
+    u_c_arr = np.zeros(n)
+    Mnorm_arr = np.zeros(n)   # M(z)/Mb -- cresce por entranhamento: dM/dz = epsilon*M
     sli = cp*T0 + g*z0
     qt = q0
     w2 = w2_0
@@ -301,6 +319,11 @@ def run_plume(z0, T0, q0, w2_0, epsilon, q_ft, u0=None, zmax=Z_TOP, dz=DZ):
     rain_flux = 0.0
     snow_flux = 0.0
     CAPE = 0.0
+
+    theta_c_arr[0] = T0/exner(z0)
+    qt_c_arr[0] = q0
+    u_c_arr[0] = u
+    Mnorm_arr[0] = 1.0
 
     for i in range(1, n):
         Te = T_env_at(z[i]); pe = p_of_z(z[i])
@@ -338,6 +361,11 @@ def run_plume(z0, T0, q0, w2_0, epsilon, q_ft, u0=None, zmax=Z_TOP, dz=DZ):
         w2 = w2 + dz*(2*A_BUOY*B - 2*B_DRAG*epsilon*w2)
         q_final = q
 
+        theta_c_arr[i] = T/exner(z[i])
+        qt_c_arr[i] = qt
+        u_c_arr[i] = u
+        Mnorm_arr[i] = Mnorm_arr[i-1]*np.exp(epsilon*dz)   # dM/dz = epsilon*M (so entranhamento)
+
         if w2 <= 0.0:
             top_idx = i
             break
@@ -350,7 +378,77 @@ def run_plume(z0, T0, q0, w2_0, epsilon, q_ft, u0=None, zmax=Z_TOP, dz=DZ):
     return dict(z_top=z[top_idx], q_top=q_final, w2_end=max(w2, 0.0),
                 z=z[:top_idx+1], B=B_arr[:top_idx+1],
                 rain=rain_flux, snow=snow_flux, CAPE=CAPE,
-                u_top=u_top, mom_flux_top=mom_flux_top)
+                u_top=u_top, mom_flux_top=mom_flux_top,
+                theta_c=theta_c_arr[:top_idx+1], qt_c=qt_c_arr[:top_idx+1],
+                u_c=u_c_arr[:top_idx+1], Mnorm=Mnorm_arr[:top_idx+1])
+
+def calcula_tendencias(plume_result, Mb, q_ft, dz_host=60.0):
+    """
+    Calcula os perfis verticais de tendencia convectiva sobre o ambiente
+    de grande escala -- o que a parametrizacao de fato devolve ao modelo
+    hospedeiro (equacoes do slide 39 do curso: adveccao, SUBSIDENCIA DE
+    LARGA ESCALA e TRANSPORTE TURBULENTO induzidos pela nuvem):
+
+        dtheta/dt|conv (z) = -(1/rho) * d/dz[ M_c(z)*(theta_c(z)-theta_amb(z)) ]
+        dq/dt|conv     (z) = -(1/rho) * d/dz[ M_c(z)*(qt_c(z)  -q_amb(z))      ]
+        du/dt|conv     (z) = -(1/rho) * d/dz[ M_c(z)*(u_c(z)   -u_amb(z))      ]
+
+    onde M_c(z) = Mb*Mnorm(z) cresce por entranhamento ao longo da
+    ascensao e cai abruptamente a zero no topo da pluma (detranhamento
+    organizado). Isso produz o perfil classico em "M" (ou dipolo) da
+    literatura (Yanai et al. 1973): aquecimento/secamento por subsidencia
+    compensatoria ao longo de toda a camada de nuvem, com um pulso extra
+    de aquecimento/umedecimento concentrado no nivel de detranhamento.
+
+    IMPORTANTE (resolucao vertical): a pluma e integrada em dz=20 m, mas
+    um modelo hospedeiro real tem camadas bem mais espessas. Calcular o
+    gradiente direto na grade fina de 20 m concentra o pulso de
+    detranhamento numa camada artificialmente fina, inflando a taxa
+    LOCAL (a quantidade fisica que se conserva e o pulso integrado na
+    vertical, nao a taxa local). Por isso, os fluxos sao reamostrados
+    para uma grade um pouco mais grossa (dz_host, default 60 m) antes de
+    calcular o gradiente. Note que 60 m ainda e bem mais fino que uma
+    camada de GCM tipica (centenas de metros) -- isso e proposital: as
+    nuvens deste modelo simplificado sao rasas (100-300 m de profundidade
+    tipica), entao uma grade de reamostragem muito grossa (ex.: 250 m)
+    apagaria a estrutura vertical da propria nuvem. Ainda assim, os
+    valores absolutos de K/dia permanecem sensiveis a essa escolha -- ver
+    a ressalva sobre a magnitude de M_b logo abaixo.
+    """
+    z = plume_result["z"]
+    n = len(z)
+    if n < 3:
+        return dict(z=z, dtheta_dt=np.zeros(n), dq_dt=np.zeros(n), du_dt=np.zeros(n))
+
+    Mc = Mb*plume_result["Mnorm"]                    # fluxo de massa [kg/m2/s]
+    theta_amb = np.array([T_env_at(zz)/exner(zz) for zz in z])
+    q_amb = np.array([q_env_at(zz, q_ft) for zz in z])
+    u_amb = np.array([u_env_at(zz) for zz in z])
+
+    F_theta = Mc*(plume_result["theta_c"] - theta_amb)
+    F_q = Mc*(plume_result["qt_c"] - q_amb)
+    F_u = Mc*(plume_result["u_c"] - u_amb)
+
+    # --- reamostra os fluxos para uma grade vertical mais grossa (dz_host) ---
+    z_top = z[-1]
+    z0 = z[0]
+    z_host = np.arange(z0, z_top+2*dz_host, dz_host)
+    F_theta_h = np.interp(z_host, z, F_theta, right=0.0)
+    F_q_h = np.interp(z_host, z, F_q, right=0.0)
+    F_u_h = np.interp(z_host, z, F_u, right=0.0)
+    # zera explicitamente a partir do primeiro nivel acima do topo real da pluma
+    above = z_host > z_top
+    F_theta_h[above] = 0.0
+    F_q_h[above] = 0.0
+    F_u_h[above] = 0.0
+
+    rho_h = p_of_z(z_host)*100.0/(Rd*np.array([T_env_at(zz) for zz in z_host]))
+
+    dtheta_dt = -np.gradient(F_theta_h, z_host)/rho_h * 86400.0
+    dq_dt = -np.gradient(F_q_h, z_host)/rho_h * 86400.0 * 1000.0   # kg/kg/dia -> g/kg/dia
+    du_dt = -np.gradient(F_u_h, z_host)/rho_h * 86400.0
+
+    return dict(z=z_host, dtheta_dt=dtheta_dt, dq_dt=dq_dt, du_dt=du_dt)
 
 EPS_SHALLOW = 5.0e-3
 EPS_DEEP    = 1.0e-4
@@ -367,11 +465,12 @@ def run_spectrum(z0, T0, q0, w2_0, q_ft):
     Correspondencia com o curso (slide 165, Eq. A32-A34, Simplified
     Arakawa-Schubert): no SAS, cada membro do espectro e indexado por uma
     taxa de entranhamento lambda, com seu proprio fluxo de massa de base
-    m_b(lambda), e os fluxos totais de s e q sao a soma ponderada por m_b(lambda)
-    sobre todo o espectro (F_s, F_q, Eq. A32-A33). Aqui, EPS_SPECTRUM faz
-    o papel de lambda; por simplicidade, todos os membros compartilham o mesmo
-    Mb_shallow(t) em vez de cada um ter seu m_b(lambda) proprio calculado por
-    funcao-trabalho - uma reducao didatica do fechamento espectral completo.
+    m_b(lambda), e os fluxos totais de s e q sao a soma ponderada por
+    m_b(lambda) sobre todo o espectro (F_s, F_q, Eq. A32-A33). Aqui,
+    EPS_SPECTRUM faz o papel de lambda; por simplicidade, todos os
+    membros compartilham o mesmo Mb_shallow(t) em vez de cada um ter seu
+    m_b(lambda) proprio calculado por funcao-trabalho -- uma reducao
+    didatica do fechamento espectral completo.
     """
     return [run_plume(z0, T0, q0, w2_0, eps, q_ft) for eps in EPS_SPECTRUM]
 
@@ -497,11 +596,11 @@ TAU_ADJUST = 3*3600.0     # escala de tempo de ajuste do CAPE (Arakawa-Schubert-
 CAPE_REF = 400.0           # CAPE de referencia para normalizar o fechamento [J/kg]
 # Correspondencia com o curso (slides 93-97, Eq. 40-43): a suposicao de
 # quase-equilibrio A=D (funcao-trabalho = dissipacao) vale quando
-# tau_DIS << tau_LS. Aqui TAU_ADJUST faz o papel de tau_LS (no curso, ~10^5 s;
-# usamos 3h=1,08x10^4 s, mais curto, adequado a escala deste modelo
-# simplificado) e CAPE_REF converte o CAPE em uma escala comparavel ao
-# M_b heuristico ja calibrado (Mb_shallow) - uma aproximacao de A=D, nao
-# a solucao completa da Eq. 42.
+# tau_DIS << tau_LS. Aqui TAU_ADJUST faz o papel de tau_LS (no curso,
+# ~10^5 s; usamos 3h=1,08x10^4 s, mais curto, adequado a escala deste
+# modelo simplificado) e CAPE_REF converte o CAPE em uma escala
+# comparavel ao M_b heuristico ja calibrado (Mb_shallow) -- uma
+# aproximacao de A=D, nao a solucao completa da Eq. 42.
 
 dt = 60.0
 t_end = 18*3600.0
@@ -533,6 +632,9 @@ last_shallow_qtop = q_ft0
 last_rain = 0.0
 last_snow = 0.0
 clouds_active = False
+
+TARGET_SNAPSHOT_HOURS = [11.0, 15.0]   # manha (so raso) e tarde (pos-transicao)
+tendencias_snapshots = {}   # {hora_alvo: {"shallow":..., "deep":..., "t_real":...}}
 
 for i in range(1, n):
     t = times[i]
@@ -579,6 +681,13 @@ for i in range(1, n):
         deep = spectrum[0]   # a de menor entranhamento (mais proxima da "profunda")
         z_top_deep[i] = deep["z_top"]
         survived_deep[i] = deep["z_top"] >= Z_CHECK_DEEP
+
+        # --- captura das tendencias convectivas em horarios-alvo (Figura de tendencias) ---
+        for hora_alvo in TARGET_SNAPSHOT_HOURS:
+            if hora_alvo not in tendencias_snapshots and t/3600.0 >= hora_alvo:
+                tend_shallow = calcula_tendencias(shallow, Mb_shallow[i], q_ft[i-1])
+                tend_deep = calcula_tendencias(deep, Mb_deep[i] if Mb_deep[i] > 0 else Mb_shallow[i], q_ft[i-1])
+                tendencias_snapshots[hora_alvo] = dict(shallow=tend_shallow, deep=tend_deep, t_real=t/3600.0)
 
         if survived_deep[i] and deep["rain"] > 0:
             dd = run_downdraft(deep["z_top"], deep["rain"], T_env_at(z0), z0)
@@ -687,3 +796,53 @@ if spectrum_tops_last is not None:
     plt.tight_layout()
     plt.savefig("v3_espectro_plumas.png", dpi=150)
     print("Figura salva: v3_espectro_plumas.png")
+
+# =====================================================================
+# 8. FIGURA 3: TENDENCIAS CONVECTIVAS (aquecimento, umedecimento, momentum)
+# =====================================================================
+# Perfis verticais de dtheta/dt, dq/dt, du/dt induzidos pela convecao sobre
+# o ambiente de grande escala -- o que a parametrizacao de fato devolve ao
+# modelo hospedeiro (slide 39 do curso: termos de subsidencia de larga
+# escala e transporte turbulento). Ver calcula_tendencias() na Secao 3.
+if len(tendencias_snapshots) > 0:
+    horas_capturadas = sorted(tendencias_snapshots.keys())
+    fig3, axs3 = plt.subplots(1, 3, figsize=(13, 6), sharey=True)
+
+    cores = {11.0: "steelblue", 15.0: "firebrick"}
+    for hora_alvo in horas_capturadas:
+        snap = tendencias_snapshots[hora_alvo]
+        cor = cores.get(hora_alvo, "black")
+        t_real = snap["t_real"]
+
+        ts = snap["shallow"]
+        axs3[0].plot(ts["dtheta_dt"], ts["z"]/1000, color=cor, ls="--",
+                     label=f"rasa, t={t_real:.1f}h")
+        axs3[1].plot(ts["dq_dt"], ts["z"]/1000, color=cor, ls="--")
+        axs3[2].plot(ts["du_dt"], ts["z"]/1000, color=cor, ls="--")
+
+        td = snap["deep"]
+        axs3[0].plot(td["dtheta_dt"], td["z"]/1000, color=cor, ls="-",
+                     label=f"profunda, t={t_real:.1f}h")
+        axs3[1].plot(td["dq_dt"], td["z"]/1000, color=cor, ls="-")
+        axs3[2].plot(td["du_dt"], td["z"]/1000, color=cor, ls="-")
+
+    for ax in axs3:
+        ax.axvline(0, color="k", lw=0.6)
+        ax.grid(alpha=0.3)
+    axs3[0].set_xlabel("dtheta/dt [K/dia]")
+    axs3[0].set_ylabel("altura [km]")
+    axs3[0].set_title("Aquecimento convectivo")
+    axs3[0].legend(fontsize=7, loc="upper right")
+    axs3[1].set_xlabel("dq/dt [g/kg/dia]")
+    axs3[1].set_title("Umedecimento convectivo")
+    axs3[2].set_xlabel("du/dt [m/s/dia]")
+    axs3[2].set_title("Transporte de momentum")
+
+    fig3.suptitle("Tendencias convectivas sobre o ambiente de grande escala\n"
+                  "(linha tracejada = pluma rasa; linha cheia = pluma profunda)",
+                  fontsize=12, fontweight="bold")
+    plt.tight_layout(rect=[0,0,1,0.90])
+    plt.savefig("v3_tendencias_convectivas.png", dpi=150)
+    print("Figura salva: v3_tendencias_convectivas.png")
+else:
+    print("Aviso: nenhum snapshot de tendencias foi capturado (confira TARGET_SNAPSHOT_HOURS).")

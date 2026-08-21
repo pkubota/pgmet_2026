@@ -1,79 +1,100 @@
-# -*- coding: utf-8 -*-
-"""
-MODELO 2D DE NUVEM CONVECTIVA (vorticidade-funcao de corrente, Boussinesq)
-============================================================================
-Curso: Conveccao Atmosferica - Regimes de Transicao
-
-OBJETIVO
---------
-Ate aqui, o curso trabalhou com um modelo de COLUNA (1D): a pluma
-entranhante integra propriedades medias ao longo de z, e o fluxo de
-massa M_c PARAMETRIZA o efeito da nuvem sobre o ambiente. Isso e
-exatamente o que um esquema de cumulus faz dentro de um modelo de
-previsao - porque rodar uma nuvem explicita em cada ponto de grade de
-um GCM seria caro demais.
-
-Este script faz o oposto: resolve a nuvem EXPLICITAMENTE em 2D (x,z),
-sem parametrizar fluxo de massa nenhum. A "pluma" deixa de ser uma
-abstracao (M_c, entranhamento eps) e passa a ser um campo de velocidade
-vertical w(x,z,t) e um campo de agua de nuvem q_c(x,z,t) que se
-desenvolvem sozinhos a partir das equacoes de movimento - o mesmo
-espirito de um CRM (Cloud-Resolving Model) bem simplificado.
-
-Comparar os dois lado a lado em aula e o ponto pedagogico central: o
-que o modelo de coluna CHAMA de "entranhamento eps" aqui aparece
-naturalmente como a mistura turbulenta nas bordas da bolha ascendente
-resolvida explicitamente.
-
-FORMULACAO
-----------
-Aproximacao de Boussinesq 2D em vorticidade-funcao de corrente
-(equacoes anelasticas simplificadas, densidade de referencia
-constante - valida para uma camada nao muito profunda, aceitavel
-para fins didaticos):
-
-  u = -dpsi/dz ,  w = dpsi/dx                          (define a funcao de corrente psi)
-  nabla^2psi = zeta                                            (Poisson; zeta = vorticidade)
-  dzeta/dt = -udzeta/dx - wdzeta/dz + (g/theta_0)dtheta'_v/dx + Knabla^2zeta  (vorticidade: o termo de empuxo
-                                                       horizontal GERA circulacao - e
-                                                       o analogo dinamico do termo de
-                                                       empuxo B do modelo de coluna)
-  dtheta'/dt = -udtheta'/dx - wdtheta'/dz - w.dtheta_env/dz + (L/(cpPi)).C + Knabla^2theta'
-  dq_v/dt = -udq_v/dx - wdq_v/dz - w.dq_venv/dz - C + Knabla^2q_v
-  dq_c/dt = -udq_c/dx - wdq_c/dz + C - autoconversao + Knabla^2q_c
-
-onde C e a taxa de condensacao (ajuste de saturacao instantaneo a cada
-passo) e K e uma DIFUSAO NUMERICA que tambem funciona, neste modelo
-simplificado, como um proxy grosseiro da mistura turbulenta de
-subgrade (o "entranhamento" resolvido implicitamente pela propria
-dinamica, em vez de parametrizado).
-
-SIMPLIFICACOES (deixadas explicitas)
--------------------------------------
-  - Adveccao upwind de 1a ordem (robusta, mas difusiva - modelos reais
-    usam esquemas de ordem mais alta);
-  - Solver de Poisson por iteracao de Jacobi (simples e vetorizado, nao
-    o mais rapido possivel, mas facil de verificar);
-  - Sem microfisica de gelo, sem downdraft explicito, sem queda de
-    precipitacao com velocidade terminal - apenas remocao simples de
-    q_c acima de um limiar (chuva "desaparece" ao ser formada, nao e
-    transportada);
-  - Paredes rigidas nas quatro bordas do dominio (psi=0), sem ciclo
-    diurno nem heterogeneidade de superficie - so o desenvolvimento de
-    UMA bolha termica inicial.
-"""
-
 import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-# (fix acima: evita UnicodeEncodeError em terminais Windows que nao usam UTF-8
-#  por padrao -- necessario para os acentos e simbolos gregos usados nos prints)
 
+"""
+MODELO 2D DE NUVEM CONVECTIVA -- VERSAO UNIFICADA E PARAMETRIZAVEL
+=====================================================================
+Curso: Conveccao Atmosferica - Regimes de Transicao
+
+Este script junta, num unico modelo 2D explicito (vorticidade-funcao de
+corrente, aproximacao de Boussinesq), a fisica que foi desenvolvida nos
+modelos de coluna (transicao_rasa_profunda.py = v1,
+transicao_fluxo_de_massa_v2.py = v2, transicao_fluxo_de_massa_v3.py = v3).
+A diferenca central e conceitual: no modelo de coluna, processos como
+entranhamento e downdraft precisam ser PARAMETRIZADOS (uma taxa epsilon,
+uma funcao run_downdraft()) porque a coluna nao tem espaco para resolve-los
+fisicamente. Aqui, com x e z explicitos, varios desses processos EMERGEM
+da propria dinamica:
+
+  - "Entranhamento" (v2/v3) -> aqui e a mistura turbulenta real nas bordas
+    da termica ascendente (via difusao numerica/advencao).
+  - "Downdraft" (v3, run_downdraft()) -> aqui NAO e mais uma funcao
+    separada: a chuva cai de verdade (velocidade terminal), evapora no ar
+    subsaturado abaixo da nuvem, resfria esse ar, e esse resfriamento entra
+    na MESMA equacao de vorticidade que gera a ascensao -- produzindo uma
+    corrente descendente fria (cold pool) que emerge sozinha, sem receita
+    separada.
+  - "Evaporacao sub-nuvem" (v3) -> mesma coisa: e so a evaporacao da chuva
+    caindo through ar nao saturado, resolvida no proprio campo.
+
+O QUE AINDA E PARAMETRIZADO (nao ha jeito de fugir disso num modelo deste
+tamanho/resolucao):
+  - Ajuste de saturacao instantaneo (condensacao/evaporacao "rapida
+    demais" para a grade resolver explicitamente);
+  - Autoconversao agua de nuvem -> chuva/neve (formulacao Tiedtke, igual
+    ao v2/v3 -- module_cu_tiedtke_F.txt, rotina cuasc);
+  - Velocidade terminal de queda de chuva/neve (constantes fixas, nao um
+    espectro de gotas);
+  - Difusao numerica como proxy de mistura turbulenta de subgrade.
+
+OPCOES DE FISICA (via linha de comando -- ver secao PARAMETROS ao final
+do cabecalho, ou rode com --help):
+  --microfisica {nenhuma, quente, mista}
+        nenhuma: dinamica seca, sem condensacao (so a termica subindo)
+        quente:  agua de nuvem + chuva (fase liquida), como o v2
+        mista:   + fase gelo/neve com particao por temperatura, como o v3
+  --evap-chuva {on, off}
+        liga/desliga a evaporacao da chuva abaixo da nuvem -- e o que
+        determina se um downdraft/cold pool aparece ou nao (compare os
+        dois para ver o efeito)
+  --radiacao {on, off}
+        liga/desliga o resfriamento radiativo lento do ambiente (v3)
+  --bolha AMPLITUDE_K
+        amplitude da bolha termica inicial (K) -- controla se a nuvem
+        fica rasa ou rompe para profunda, como nos cenarios do v2/v3
+  --tempo MINUTOS
+        tempo total de simulacao (padrao 60 min)
+  --cenario NOME
+        rotulo usado nos nomes dos arquivos de figura gerados
+
+EXEMPLOS:
+  python3 nuvem_2d.py --bolha 2.5 --microfisica quente --cenario rasa
+  python3 nuvem_2d.py --bolha 7.0 --microfisica mista --evap-chuva on --cenario profunda_downdraft
+  python3 nuvem_2d.py --bolha 7.0 --microfisica mista --evap-chuva off --cenario profunda_sem_downdraft
+"""
+
+import argparse
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# =====================================================================
+# PARAMETROS (linha de comando)
+# =====================================================================
+parser = argparse.ArgumentParser(description="Modelo 2D de nuvem convectiva -- versao parametrizavel")
+parser.add_argument("--bolha", type=float, default=3.0, help="amplitude da bolha termica inicial [K]")
+parser.add_argument("--cenario", type=str, default="bolha", help="rotulo p/ os arquivos de saida")
+parser.add_argument("--microfisica", choices=["nenhuma", "quente", "mista"], default="mista",
+                     help="nenhuma=dinamica seca; quente=agua+chuva (v2); mista=+gelo/neve (v3)")
+parser.add_argument("--evap-chuva", choices=["on", "off"], default="on",
+                     help="evaporacao da chuva abaixo da nuvem (gera downdraft/cold pool se 'on')")
+parser.add_argument("--radiacao", choices=["on", "off"], default="off",
+                     help="resfriamento radiativo lento do ambiente (v3)")
+parser.add_argument("--tempo", type=float, default=60.0, help="tempo total de simulacao [min]")
+args, _unknown = parser.parse_known_args()
+
+MICROFISICA = args.microfisica
+EVAP_CHUVA = (args.evap_chuva == "on")
+RADIACAO = (args.radiacao == "on")
+DTHETA_BUBBLE = args.bolha
+CENARIO = args.cenario
+T_END = args.tempo * 60.0
+
+print(f"Configuracao: bolha={DTHETA_BUBBLE}K  microfisica={MICROFISICA}  "
+      f"evap_chuva={EVAP_CHUVA}  radiacao={RADIACAO}  tempo={args.tempo}min  cenario={CENARIO}")
 
 # =====================================================================
 # 1. CONSTANTES E GRADE
@@ -83,12 +104,14 @@ cp = 1004.0
 Rd = 287.0
 Rv = 461.5
 Lv = 2.5e6
+Lf = 3.337e5
+Ls = Lv + Lf
 eps_R = Rd/Rv
 p0 = 1000.0
-theta0 = 300.0     # temperatura potencial de referencia (Boussinesq) [K]
+theta0 = 300.0
 
 nx, nz = 90, 110
-dx, dz = 100.0, 100.0      # 9 km x 11 km
+dx, dz = 100.0, 100.0
 x = np.arange(nx)*dx
 z = np.arange(nz)*dz
 X, Z = np.meshgrid(x, z, indexing='ij')
@@ -104,24 +127,33 @@ def qsat_liq(T, p):
     es = 6.112*np.exp(17.67*Tc/(Tc+243.5))
     return eps_R*es/np.maximum(p-es, 1e-3)
 
+def qsat_ice(T, p):
+    Tc = T - 273.15
+    es = 6.112*np.exp(22.46*Tc/(Tc+272.62))
+    return eps_R*es/np.maximum(p-es, 1e-3)
+
+T_ICE_ALL = 233.15
+T_LIQ_ALL = 273.15
+
+def ice_fraction(T):
+    f = (T_LIQ_ALL - T)/(T_LIQ_ALL - T_ICE_ALL)
+    return np.clip(f, 0.0, 1.0)
+
+def qsat_mixed(T, p):
+    fi = ice_fraction(T)
+    return (1.0-fi)*qsat_liq(T, p) + fi*qsat_ice(T, p)
+
 # =====================================================================
-# 2. ESTADO BASE (ambiente) - mesma filosofia do modelo de coluna:
+# 2. ESTADO BASE (ambiente) -- mesma filosofia dos modelos de coluna:
 #    camada quase-neutra -> capa estavel (CIN) -> camada fracamente
 #    estavel em theta mas condicionalmente instavel na saturacao (CAPE)
-#    -> capa estavel no topo (tropopausa efetiva do dominio)
+#    -> capa estavel no topo
 # =====================================================================
 def dtheta_dz_env(zz):
     return np.where(zz < 1000, 3.0e-3,
-           np.where(zz < 2000, 6.5e-3,      # capa estavel -> CIN
-           np.where(zz < 8500, 2.0e-3,      # fracamente estavel em theta, mas
-                                              # instavel na saturacao (CAPE via
-                                              # calor latente)
-                    6.0e-3)))                # capa estavel no topo
-
-theta_env_1d = np.zeros(nz)
-theta_env_1d[0] = theta0
-for k in range(1, nz):
-    theta_env_1d[k] = theta_env_1d[k-1] + dtheta_dz_env(z[k-1])*dz
+           np.where(zz < 2000, 6.5e-3,
+           np.where(zz < 8500, 2.0e-3,
+                    6.0e-3)))
 
 theta_env_1d = np.zeros(nz)
 theta_env_1d[0] = theta0
@@ -134,11 +166,8 @@ T_env_1d = theta_env_1d*PI
 QSAT_ENV_1d = qsat_liq(T_env_1d, P)
 
 def RH_env_profile(zz):
-    # umidade relativa de fundo do ambiente -- SEMPRE subsaturada, para que
-    # a nuvem so apareca onde a bolha realmente levantar e resfriar o ar
-    # ate a saturacao (nao o ambiente "de fundo" sozinho)
     return np.where(zz < 1000, 0.70,
-           np.where(zz < 2000, 0.35,     # capa seca -> reforca o CIN
+           np.where(zz < 2000, 0.35,
            np.where(zz < 8500, 0.55,
                     0.20)))
 
@@ -146,34 +175,37 @@ RH_env_1d = RH_env_profile(z)
 qv_env_1d = RH_env_1d*QSAT_ENV_1d
 
 THETA_ENV = np.broadcast_to(theta_env_1d[None, :], (nx, nz)).copy()
-QV_ENV = np.broadcast_to(qv_env_1d[None, :], (nx, nz)).copy()
 DTHETA_ENV_DZ = np.gradient(theta_env_1d, dz)
 DQV_ENV_DZ = np.gradient(qv_env_1d, dz)
+QV_ENV_BASE = qv_env_1d.copy()   # referencia p/ resfriamento radiativo nao mexer na umidade
+
+RAD_COOL_RATE = 1.5/86400.0   # K/s (~1.5 K/dia) -- so usado se --radiacao on
 
 # =====================================================================
-# 3. CAMPOS PROGNOSTICOS
+# 3. CAMPOS PROGNOSTICOS (criados conforme a opcao de microfisica)
 # =====================================================================
 zeta = np.zeros((nx, nz))
-psi  = np.zeros((nx, nz))
-thp  = np.zeros((nx, nz))   # theta' (perturbacao)
-qvp  = np.zeros((nx, nz))   # qv' (perturbacao)
-qc   = np.zeros((nx, nz))   # agua de nuvem (nao-negativa)
-rain_removed = np.zeros((nx, nz))  # acumulado de "chuva" removida (diagnostico)
+psi = np.zeros((nx, nz))
+thp = np.zeros((nx, nz))
+qvp = np.zeros((nx, nz))
+qc = np.zeros((nx, nz))
+qi = np.zeros((nx, nz))              # so usado se microfisica == "mista"
+qr = np.zeros((nx, nz))              # chuva -- usado se microfisica != "nenhuma"
+qsnow = np.zeros((nx, nz))           # neve/graupel -- so usado se microfisica == "mista"
 
+surface_rain_accum = np.zeros(nx)     # acumulado de chuva na superficie [mm]
 
 # --- Bolha termica inicial (o gatilho) ---
 X0, Z0 = 4500.0, 500.0
 RX, RZ = 1100.0, 600.0
-DTHETA_BUBBLE = float(sys.argv[1]) if len(sys.argv) > 1 else 3.0   # K
-CENARIO = sys.argv[2] if len(sys.argv) > 2 else "bolha"
 r2 = ((X-X0)/RX)**2 + ((Z-Z0)/RZ)**2
 thp += DTHETA_BUBBLE*np.exp(-r2)*(r2 < 6)
-qvp += 0.5e-3*np.exp(-r2)*(r2 < 6)   # bolha tambem um pouco mais umida que o ambiente local
+qvp += 0.5e-3*np.exp(-r2)*(r2 < 6)
 
 # =====================================================================
 # 4. OPERADORES NUMERICOS
 # =====================================================================
-def poisson_jacobi(zeta_field, psi_guess, niter=200, omega=1.0):
+def poisson_jacobi(zeta_field, psi_guess, niter=120, omega=1.0):
     psi_f = psi_guess.copy()
     dx2, dz2 = dx*dx, dz*dz
     denom = 2.0*(1.0/dx2 + 1.0/dz2)
@@ -194,6 +226,8 @@ def velocities(psi_f):
     return u, w
 
 def upwind_advect(f, u, w):
+    """Adveccao upwind de 1a ordem. 'w' pode ja incluir uma velocidade de
+    queda (para chuva/neve): passe (w_ar - Vt) em vez de w_ar."""
     dfdx = np.zeros_like(f)
     dfdz = np.zeros_like(f)
     dfdx[1:-1, :] = np.where(u[1:-1, :] > 0,
@@ -218,118 +252,253 @@ def apply_bc(f, zero_grad=True):
         f[0, :] = 0.0; f[-1, :] = 0.0; f[:, 0] = 0.0; f[:, -1] = 0.0
     return f
 
-K_DIFF = 25.0        # m^2/s -- difusao numerica (proxy grosseiro de mistura turbulenta)
-QC_CRIT = 1.0e-3      # kg/kg -- limiar de autoconversao (chuva "some" acima disso)
-TAU_AUTO = 400.0      # s -- escala de tempo da autoconversao
+K_DIFF = 25.0
+
+# --- Autoconversao (relaxacao tipo Kessler acima de um limiar -- mesma forma
+#     matematica usada em run_plume() do v2/v3; a versao com profundidade
+#     acima da base da nuvem do Tiedtke/v2/v3 exigiria rastrear a altura da
+#     base por coluna, o que fica como extensao possivel) ---
+QC_CRIT = 0.3e-3              # kg/kg -- limiar de autoconversao
+TAU_AUTO = 300.0              # s
+TAU_AUTO_ICE = 550.0           # s -- mais lento (agregacao/deposicao vs. coalescencia)
+
+# --- Velocidades terminais de queda (constantes simplificadas) ---
+VT_RAIN = 5.0    # m/s
+VT_SNOW = 1.5    # m/s
+
+# --- Evaporacao da chuva/neve no ar nao saturado ---
+EVAP_COEF = 2.0e-3   # 1/s por unidade de deficit de saturacao (kg/kg)
 
 # =====================================================================
 # 5. LOOP TEMPORAL
 # =====================================================================
 dt = 1.5
-t_end = 3600.0
-nsteps = int(t_end/dt)
-save_every = int(300/dt)   # salva um quadro a cada 5 minutos simulados
+nsteps = int(T_END/dt)
+save_every = int(300/dt)
 
-frames_qc, frames_w, frames_thp, frames_t = [], [], [], []
+frames_qc, frames_qr, frames_w, frames_thp, frames_t = [], [], [], [], []
+frames_qvp, frames_u = [], []   # necessarios para calcular as tendencias (dtheta/dt, dq/dt, du/dt)
 
 for step in range(nsteps+1):
     u, w = velocities(psi)
 
+    # --- resfriamento radiativo lento (opcional) ---
+    if RADIACAO:
+        THETA_ENV_now = THETA_ENV - RAD_COOL_RATE*step*dt
+    else:
+        THETA_ENV_now = THETA_ENV
+
+    T = (THETA_ENV_now+thp)*PI[None, :]
+
     # --- ajuste de saturacao (condensacao/evaporacao instantanea) ---
-    T = (THETA_ENV+thp)*PI[None, :]
-    qs = qsat_liq(T, P[None, :])
-    qv_total = QV_ENV+qvp
-    cond = qv_total - qs   # >0 condensa, <0 pode evaporar q_c
+    if MICROFISICA != "nenhuma":
+        if MICROFISICA == "mista":
+            qs = qsat_mixed(T, P[None, :])
+            fi = ice_fraction(T)
+        else:
+            qs = qsat_liq(T, P[None, :])
+            fi = np.zeros_like(T)
 
-    to_condense = np.maximum(cond, 0.0)
-    to_evaporate = np.minimum(np.maximum(-cond, 0.0), qc)
+        qv_total = qv_env_1d[None, :] + qvp
+        cond = qv_total - qs
+        to_condense = np.maximum(cond, 0.0)
+        # evapora primeiro a agua liquida de nuvem, depois (mista) o gelo
+        to_evap_liq = np.minimum(np.maximum(-cond, 0.0), qc)
+        resto = np.maximum(-cond, 0.0) - to_evap_liq
+        to_evap_ice = np.minimum(resto, qi) if MICROFISICA == "mista" else 0.0
 
-    qvp += -to_condense + to_evaporate
-    qc  += to_condense - to_evaporate
-    thp += (Lv/(cp*PI[None, :]))*(to_condense-to_evaporate)
+        d_ql = to_condense*(1.0-fi) - to_evap_liq
+        d_qi = (to_condense*fi - to_evap_ice) if MICROFISICA == "mista" else 0.0
 
-    # --- autoconversao simples (remove q_c acima do limiar) ---
-    excess = np.maximum(qc-QC_CRIT, 0.0)
-    removed = excess*(1-np.exp(-dt/TAU_AUTO))
-    qc -= removed
-    rain_removed += removed
+        qvp += -(to_condense) + to_evap_liq + (to_evap_ice if MICROFISICA == "mista" else 0.0)
+        qc += d_ql
+        if MICROFISICA == "mista":
+            qi += d_qi
+        Leff_cond = Lv*(to_condense*(1.0-fi)) + (Ls*(to_condense*fi) if MICROFISICA == "mista" else 0.0)
+        Leff_evap = Lv*to_evap_liq + (Ls*to_evap_ice if MICROFISICA == "mista" else 0.0)
+        thp += (Leff_cond - Leff_evap)/(cp*PI[None, :])
+
+        # --- autoconversao: agua/gelo de nuvem -> chuva/neve (Tiedtke) ---
+        excess_l = np.maximum(qc-QC_CRIT, 0.0)
+        removed_l = excess_l*(1-np.exp(-dt/TAU_AUTO))
+        qc -= removed_l
+        qr += removed_l
+
+        if MICROFISICA == "mista":
+            excess_i = np.maximum(qi-QC_CRIT, 0.0)
+            removed_i = excess_i*(1-np.exp(-dt/TAU_AUTO_ICE))
+            qi -= removed_i
+            qsnow += removed_i
+
+            # --- derretimento de neve abaixo do nivel de congelamento ---
+            melt_mask = (T > T_LIQ_ALL) & (qsnow > 0)
+            melted = np.where(melt_mask, qsnow, 0.0)
+            qsnow -= melted
+            qr += melted
+            thp -= (Lf*melted)/(cp*PI[None, :])   # derreter consome calor latente de fusao
+
+        # --- evaporacao da chuva/neve no ar nao saturado (=> downdraft resolvido) ---
+        if EVAP_CHUVA:
+            qs_now = qsat_liq(T, P[None, :])
+            deficit = np.maximum(qs_now - (qv_env_1d[None, :]+qvp), 0.0)
+            evap_rain = np.minimum(qr, EVAP_COEF*dt*deficit*1000.0*qr)
+            qr -= evap_rain
+            qvp += evap_rain
+            thp -= (Lv*evap_rain)/(cp*PI[None, :])   # resfriamento evaporativo -> puxa o downdraft
+
+            if MICROFISICA == "mista":
+                evap_snow = np.minimum(qsnow, EVAP_COEF*dt*deficit*1000.0*qsnow)
+                qsnow -= evap_snow
+                qvp += evap_snow
+                thp -= (Ls*evap_snow)/(cp*PI[None, :])
+
+    # (nota: um diagnostico fisico de taxa de precipitacao em mm/h exigiria
+    #  integrar o fluxo de massa vertical qr*Vt_rain na ultima camada antes
+    #  do fundo do dominio -- deixado como exercicio de extensao; aqui o
+    #  foco e no campo qr em si e no efeito dinamico do downdraft, nao no
+    #  acumulado de superficie)
 
     if step == nsteps:
         break
 
     # --- tendencias dinamicas ---
+    thv = thp + 0.61*theta0*qvp - theta0*(qc+qi+qr+qsnow)   # empuxo com carregamento de agua/gelo
     dthv_dx = np.zeros_like(thp)
-    thv = thp + 0.61*theta0*qvp   # aprox. de temperatura potencial virtual perturbada
     dthv_dx[1:-1, :] = (thv[2:, :]-thv[:-2, :])/(2*dx)
     buoy_torque = (g/theta0)*dthv_dx
 
     dzeta = upwind_advect(zeta, u, w) + buoy_torque + K_DIFF*laplacian(zeta)
-    dthp  = upwind_advect(thp, u, w) - w*DTHETA_ENV_DZ[None, :] + K_DIFF*laplacian(thp)
-    dqvp  = upwind_advect(qvp, u, w) - w*DQV_ENV_DZ[None, :] + K_DIFF*laplacian(qvp)
-    dqc   = upwind_advect(qc, u, w) + K_DIFF*laplacian(qc)
+    dthp = upwind_advect(thp, u, w) - w*DTHETA_ENV_DZ[None, :] + K_DIFF*laplacian(thp)
+    dqvp = upwind_advect(qvp, u, w) - w*DQV_ENV_DZ[None, :] + K_DIFF*laplacian(qvp)
+    dqc = upwind_advect(qc, u, w) + K_DIFF*laplacian(qc)
+    dqi = upwind_advect(qi, u, w) + K_DIFF*laplacian(qi) if MICROFISICA == "mista" else 0.0
+    dqr = upwind_advect(qr, u, w-VT_RAIN) + K_DIFF*laplacian(qr) if MICROFISICA != "nenhuma" else 0.0
+    dqsnow = upwind_advect(qsnow, u, w-VT_SNOW) + K_DIFF*laplacian(qsnow) if MICROFISICA == "mista" else 0.0
 
     zeta = zeta + dt*dzeta
-    thp  = thp  + dt*dthp
-    qvp  = qvp  + dt*dqvp
-    qc   = np.maximum(qc + dt*dqc, 0.0)
+    thp = thp + dt*dthp
+    qvp = qvp + dt*dqvp
+    qc = np.maximum(qc + dt*dqc, 0.0)
+    if MICROFISICA == "mista":
+        qi = np.maximum(qi + dt*dqi, 0.0)
+    if MICROFISICA != "nenhuma":
+        qr = np.maximum(qr + dt*dqr, 0.0)
+    if MICROFISICA == "mista":
+        qsnow = np.maximum(qsnow + dt*dqsnow, 0.0)
 
     zeta = apply_bc(zeta, zero_grad=False)
-    thp  = apply_bc(thp,  zero_grad=True)
-    qvp  = apply_bc(qvp,  zero_grad=True)
-    qc   = apply_bc(qc,   zero_grad=True)
+    thp = apply_bc(thp, zero_grad=True)
+    qvp = apply_bc(qvp, zero_grad=True)
+    qc = apply_bc(qc, zero_grad=True)
+    if MICROFISICA == "mista":
+        qi = apply_bc(qi, zero_grad=True)
+    if MICROFISICA != "nenhuma":
+        qr = apply_bc(qr, zero_grad=True)
+    if MICROFISICA == "mista":
+        qsnow = apply_bc(qsnow, zero_grad=True)
 
     psi = poisson_jacobi(zeta, psi, niter=120)
 
     if step % save_every == 0:
-        frames_qc.append(qc.copy())
+        frames_qc.append((qc+qi).copy())
+        frames_qr.append((qr+qsnow).copy())
         frames_w.append(w.copy())
         frames_thp.append(thp.copy())
+        frames_qvp.append(qvp.copy())
+        frames_u.append(u.copy())
         frames_t.append(step*dt)
-        wmax = w.max()
-        print(f"t={step*dt/60:5.1f} min | w_max={wmax:5.2f} m/s | "
-              f"qc_max={qc.max()*1000:5.3f} g/kg | topo_nuvem~"
-              f"{(z[np.where(qc.max(axis=0)>1e-5)[0].max()] if (qc>1e-5).any() else 0):6.0f} m")
+        cloud_top = z[np.where((qc+qi).max(axis=0) > 1e-5)[0].max()] if (qc+qi).max() > 1e-5 else 0
+        print(f"t={step*dt/60:5.1f} min | w_max={w.max():5.2f} m/s | w_min={w.min():5.2f} m/s | "
+              f"qc_max={(qc+qi).max()*1000:5.3f} g/kg | topo_nuvem~{cloud_top:6.0f} m | "
+              f"thp_min={thp.min():5.2f} K (cold pool se negativo perto do chao)")
 
 print("Simulacao concluida.")
 
 # =====================================================================
-# 6. FIGURA: evolucao da nuvem em varios horarios
+# 6. FIGURAS
 # =====================================================================
+# --- Tendencias: diferenca entre quadros consecutivos (dt = save_every*dt) ---
+# No modelo de coluna (v3), a tendencia tem que ser PARAMETRIZADA (funcao
+# calcula_tendencias(), subsidencia compensatoria + pulso de detranhamento)
+# porque a coluna nao resolve x. Aqui NAO -- e so a diferenca no tempo do
+# proprio campo resolvido: dtheta/dt = (theta'(t+dt)-theta'(t))/dt. Mesma
+# fisica (slide 39 do curso), mas sem precisar de nenhuma parametrizacao.
+frame_dt_days = (frames_t[1]-frames_t[0])/86400.0 if len(frames_t) > 1 else 1.0
+frames_dtheta_dt = []   # K/dia
+frames_dq_dt = []       # g/kg/dia
+frames_du_dt = []       # m/s/dia
+for j in range(len(frames_t)-1):
+    frames_dtheta_dt.append((frames_thp[j+1]-frames_thp[j])/frame_dt_days)
+    frames_dq_dt.append((frames_qvp[j+1]-frames_qvp[j])/frame_dt_days*1000.0)
+    frames_du_dt.append((frames_u[j+1]-frames_u[j])/frame_dt_days)
+# o ultimo quadro nao tem "proximo" -- repete a ultima tendencia valida so
+# para manter os paineis alinhados com os das linhas de estado
+frames_dtheta_dt.append(frames_dtheta_dt[-1] if frames_dtheta_dt else np.zeros_like(thp))
+frames_dq_dt.append(frames_dq_dt[-1] if frames_dq_dt else np.zeros_like(thp))
+frames_du_dt.append(frames_du_dt[-1] if frames_du_dt else np.zeros_like(thp))
+
 n_panels = min(6, len(frames_qc))
 idxs = np.linspace(0, len(frames_qc)-1, n_panels).astype(int)
 
-fig, axs = plt.subplots(2, n_panels, figsize=(3.1*n_panels, 7), sharex=True, sharey=True)
+fig, axs = plt.subplots(6, n_panels, figsize=(3.1*n_panels, 19), sharex=True, sharey=True)
 for j, idx in enumerate(idxs):
     t_min = frames_t[idx]/60
     ax1 = axs[0, j]
-    pc1 = ax1.contourf(X/1000, Z/1000, frames_qc[idx]*1000, levels=np.linspace(0, 2, 11),
-                        cmap="Blues", extend="max")
-    ax1.set_title(f"t={t_min:.0f} min\nq_c [g/kg]", fontsize=9)
+    ax1.contourf(X/1000, Z/1000, frames_qc[idx]*1000, levels=np.linspace(0, 2, 11), cmap="Blues", extend="max")
+    ax1.set_title(f"t={t_min:.0f} min\nqc+qi [g/kg]", fontsize=9)
     if j == 0: ax1.set_ylabel("altura [km]")
 
     ax2 = axs[1, j]
     lim = max(1.0, np.abs(frames_w[idx]).max())
-    pc2 = ax2.contourf(X/1000, Z/1000, frames_w[idx], levels=np.linspace(-lim, lim, 15),
-                        cmap="RdBu_r")
+    ax2.contourf(X/1000, Z/1000, frames_w[idx], levels=np.linspace(-lim, lim, 15), cmap="RdBu_r")
     ax2.set_title("w [m/s]", fontsize=9)
-    ax2.set_xlabel("x [km]")
     if j == 0: ax2.set_ylabel("altura [km]")
 
-fig.suptitle(f"Modelo 2D explicito de nuvem convectiva - cenario: {CENARIO} (Deltatheta={DTHETA_BUBBLE}K)",
-             fontsize=13, fontweight="bold")
-plt.tight_layout(rect=[0, 0, 1, 0.95])
+    ax3 = axs[2, j]
+    qr_max = max(1e-4, frames_qr[idx].max())
+    ax3.contourf(X/1000, Z/1000, frames_qr[idx]*1000, levels=np.linspace(0, qr_max*1000, 11),
+                 cmap="Greens", extend="max")
+    ax3.set_title("chuva+neve [g/kg]", fontsize=9)
+    if j == 0: ax3.set_ylabel("altura [km]")
+
+    ax4 = axs[3, j]
+    lim_th = max(5.0, np.abs(frames_dtheta_dt[idx]).max())
+    ax4.contourf(X/1000, Z/1000, frames_dtheta_dt[idx], levels=np.linspace(-lim_th, lim_th, 15),
+                 cmap="RdBu_r")
+    ax4.set_title("dtheta/dt [K/dia]", fontsize=9)
+    if j == 0: ax4.set_ylabel("altura [km]")
+
+    ax5 = axs[4, j]
+    lim_q = max(5.0, np.abs(frames_dq_dt[idx]).max())
+    ax5.contourf(X/1000, Z/1000, frames_dq_dt[idx], levels=np.linspace(-lim_q, lim_q, 15),
+                 cmap="BrBG")
+    ax5.set_title("dq/dt [g/kg/dia]", fontsize=9)
+    if j == 0: ax5.set_ylabel("altura [km]")
+
+    ax6 = axs[5, j]
+    lim_u = max(5.0, np.abs(frames_du_dt[idx]).max())
+    ax6.contourf(X/1000, Z/1000, frames_du_dt[idx], levels=np.linspace(-lim_u, lim_u, 15),
+                 cmap="PuOr")
+    ax6.set_title("du/dt [m/s/dia]", fontsize=9)
+    ax6.set_xlabel("x [km]")
+    if j == 0: ax6.set_ylabel("altura [km]")
+
+fig.suptitle(f"Modelo 2D unificado -- {CENARIO} (bolha={DTHETA_BUBBLE}K, microfisica={MICROFISICA}, "
+             f"evap_chuva={EVAP_CHUVA}, radiacao={RADIACAO})", fontsize=11, fontweight="bold")
+plt.tight_layout(rect=[0, 0, 1, 0.96])
 plt.savefig(f"nuvem_2d_evolucao_{CENARIO}.png", dpi=150)
 print(f"Figura salva: nuvem_2d_evolucao_{CENARIO}.png")
 
-# --- Figura extra: snapshot unico mais detalhado no horario de maior desenvolvimento ---
-idx_max = int(np.argmax([f.max() for f in frames_qc]))
-fig2, ax = plt.subplots(figsize=(6, 7))
-cf = ax.contourf(X/1000, Z/1000, frames_qc[idx_max]*1000, levels=np.linspace(0, 2, 11),
-                  cmap="Blues", extend="max")
-ax.contour(X/1000, Z/1000, frames_w[idx_max], levels=[1, 3, 5, 8], colors="black", linewidths=0.8)
-plt.colorbar(cf, ax=ax, label="q_c [g/kg]")
-ax.set_xlabel("x [km]"); ax.set_ylabel("altura [km]")
-ax.set_title(f"Nuvem em t={frames_t[idx_max]/60:.0f} min - {CENARIO}\n(contornos pretos: w em m/s)")
-plt.tight_layout()
-plt.savefig(f"nuvem_2d_detalhe_{CENARIO}.png", dpi=150)
-print(f"Figura salva: nuvem_2d_detalhe_{CENARIO}.png")
+# --- Figura extra: perfil de theta' minimo perto do chao (diagnostico de cold pool) ---
+if len(frames_thp) > 0:
+    thp_sfc = [f[:, 1].min() for f in frames_thp]
+    fig2, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(np.array(frames_t)/60, thp_sfc, marker="o")
+    ax.axhline(0, color="k", lw=0.5)
+    ax.set_xlabel("tempo [min]")
+    ax.set_ylabel("theta' minimo perto do chao [K]")
+    ax.set_title(f"Diagnostico de cold pool -- {CENARIO}\n(negativo = ar frio de downdraft chegando a superficie)")
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"nuvem_2d_coldpool_{CENARIO}.png", dpi=150)
+    print(f"Figura salva: nuvem_2d_coldpool_{CENARIO}.png")
